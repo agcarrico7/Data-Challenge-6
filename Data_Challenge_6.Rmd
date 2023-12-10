@@ -1,0 +1,295 @@
+---
+title: 'Data Challenge #6'
+author: "Amanda Carrico"
+date: "2023-12-09"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 2
+    number_sections: no
+    theme: cerulean
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  word_document:
+    toc: no
+  pdf_document:
+    toc: no
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(cache=TRUE, echo=TRUE, error=FALSE, message=FALSE, warning=FALSE, tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+```{r libraries}
+## load in required libraries 
+library(hbim)
+library(mvtnorm)
+library(tidyverse)
+library(corrplot)
+library(plotly)
+library(mclust)
+library(knitr)
+```
+
+## Simulate Data
+#### We will begin by simulating some data to do principal component analysis (PCA) and clustering on. Use the following provided code to simulate data for this exercise. We will be simulating data from two groups.
+```{r simulate}
+## set a seed for reproducibility
+set.seed(12345)
+
+## create an exhangeable variance covariance for the data
+sigma <- make.v(n = 100, r = .6, sig2 = 1)
+
+## create centers for the two clusters. 
+center_1 <- rep(1, 100)
+center_2 <- rep(3, 100)
+
+## simulate data for two groups from a multivariate normal distribution 
+data = rbind(rmvnorm(50, mean = center_1, sigma = sigma),
+             rmvnorm(50, mean = center_2, sigma = sigma))
+
+## add a group label to the data 
+data = data.frame(group = c(rep(1, 50), rep(2, 50)), data)
+
+head(data)
+```
+
+<br>
+
+## Visualize the Data
+#### Next we will visualize the data.
+#### - Create density plots colored by group membership of the first three variables in the dataset. Comment on what you observe.
+```{r 2a}
+# filter data for each group
+group_1 <- data %>% filter(group == 1)
+group_2 <- data %>% filter(group == 2)
+
+# use filtered data to plot density for both groups on same plot and color by group, add title and other aesthetics, for variable X1
+ggplot() +
+  geom_density(mapping = aes(x = group_1$X1, col = "Group 1")) +
+  geom_density(mapping = aes(x = group_2$X1, col = "Group 2")) +
+  labs(x = "X1", title = "Density Plot of X1 by Group", col = "Group") +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme_minimal()
+
+# do same for next plot but for X2
+ggplot() +
+  geom_density(mapping = aes(x = group_1$X2, col = "Group 1")) +
+  geom_density(mapping = aes(x = group_2$X2, col = "Group 2")) +
+  labs(x = "X2", title = "Density Plot of X2 by Group", col = "Group") +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme_minimal()
+
+# again, create same plot but for X3 variable
+ggplot() +
+  geom_density(mapping = aes(x = group_1$X3, col = "Group 1")) +
+  geom_density(mapping = aes(x = group_2$X3, col = "Group 2")) +
+  labs(x = "X3", title = "Density Plot of X3 by Group", col = "Group") +
+  theme(plot.title = element_text(hjust = .5)) +
+  theme_minimal()
+```
+
+In general, group 2 has higher values for all variables - their median is larger and most values appear to be when compared to group 1. Group 1 also appears to be more right skewed while group 2 appears more left skewed. The shapes of the distributions appear fairly similar for all three variables, with X2 varying the most from X1 and X3. The variables vary from -2 to 6 for the most for each one - it is interesting that all of these variables have a similar range. Scaling may not be necessary but to ensure no impact may anyway.
+
+#### - Look at the correlation of the data using corrplot::corrplot. Comment on what you observe.
+```{r 2b}
+# use cor function to get matrix of correlation coefficients for first 3 variables within group 1 filter, store matrix in variable
+cor_1 <- cor(group_1 %>% select(X1, X2, X3))
+# use stored matrix to make correlation plot
+corrplot(cor_1, title = "Correlation Plot of X1, X2, and X3 for Group 1", addCoef.col = 1, tl.cex = .5, number.cex = .5, cex.main = .5)
+
+# repeat previous steps for the first 3 variables within the group 2 filter
+cor_2 <- cor(group_2 %>% select(X1, X2, X3))
+corrplot(cor_2, title = "Correlation Plot of X1, X2, and X3 for Group 2", addCoef.col = 1, tl.cex = .5, number.cex = .5, cex.main = .5)
+
+# repeat again to get correlation plot for no filtered, total, data
+cor_tot <- cor(data %>% select(X1, X2, X3))
+corrplot(cor_tot, title = "Correlation Plot of X1, X2, and X3", addCoef.col = 1, tl.cex = .5, number.cex = .5, cex.main = .5 )
+
+# show plot for all variables
+cor_all <- cor(data)
+corrplot(cor_all, title = "Correlation Plot of all Variables in Simulated Data", addCoef.col = 1, tl.cex = .5, cex.main = .5, number.cex = .5)
+```
+
+Regardless of group, the correlation plots appear fairly similar, with most correlations appearing to be at least .6. Group 2 appeared to have the weakest correlations, closest to .6 and using total data had the most with correlations between variables all being around .8. The variables that were the most highly correlated for the total data as well as by groups were X1 and X3. The variables that were the least correlated were X2 and X3 or X2 and X1. With the range for correlation coefficient being from around .68 to .87 for all variable relationships in all groupings (total data, group 1, and group 2), these variables appear to be strongly linearly correlated with each other despite differing groups.
+
+<br>
+
+## Perform PCA on the Data
+#### - Perform PCA on the data.
+```{r 3a}
+# data has similar variances but want to ensure no effect so scale 
+data_scaled <- scale(data %>% select(-group))
+# use prcomp function for PCA and store for later use
+pca_data <- prcomp(data_scaled, center = FALSE, scale. = FALSE)
+```
+
+#### - Make a plot of the cumulative variance explained by the PCs.
+```{r 3b}
+# create scree plot of cumulative variation for each PC
+ggplot(mapping = aes(x = 1:100, y = summary(pca_data)$importance[3,])) +
+  geom_line() +
+  labs(title = "Scree Plot of PCA Cumulative Variance Explained", 
+       x = "PC", 
+       y = "Cumulative Variance Explained") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = .5))
+```
+
+#### - Make bivariate plots of all combinations of the scores on the first, second, and third PC colored by group membership.
+```{r 3c, quiet = TRUE, fig.keep = 'all'}
+# store scores of PCA in new variable and add the FoodGroup variable to tibble for plot later
+pca_data_scores <- as_tibble(pca_data$x[,1:3])
+pca_data_scores <- pca_data_scores %>%
+mutate(Group = factor(data$group))
+
+# create scatter plot using scores for PC1 vs PC2, PC1 vs PC3, and PC2 vs PC3 colored by the Group variable, use plotly_build function to make plots interaction
+PC1_2 <- ggplot(pca_data_scores, aes(x = PC2, y = PC1, col = Group)) +
+            geom_point() +
+            labs(title = "PC1 vs PC2 Scores by Group Membership") +
+            theme(plot.title = element_text(hjust = .5))
+            theme_minimal()
+plotly_build(PC1_2)
+            
+PC1_3 <- ggplot(pca_data_scores, aes(x = PC3, y = PC1, col = Group)) +
+            geom_point() +
+            labs(title = "PC1 vs PC3 Scores by Group Membership") +
+            theme(plot.title = element_text(hjust = .5))
+            theme_minimal()
+plotly_build(PC1_3)
+
+PC2_3 <- ggplot(pca_data_scores, aes(x = PC3, y = PC2, col = Group)) +
+            geom_point() +
+            labs(title = "PC2 vs PC3 Scores by Group Membership") +
+            theme(plot.title = element_text(hjust = .5))
+            theme_minimal()
+plotly_build(PC2_3)
+```
+
+
+<br>
+
+## Cluster
+#### Cluster the original data into 2 clusters using
+#### 1. k-means
+```{r 4a}
+# use scaled data from PC analysis
+
+# set seed
+set.seed(100)
+
+# use kmeans function to cluster and show results
+k_means_results <- kmeans(data_scaled, 2, nstart = 50)
+
+# add results of clustering to original data
+data_kmean <- data %>%
+  mutate(kmeans_cluster = k_means_results$cluster)
+```
+
+#### 2. Gaussian mixture model
+```{r 4b}
+# filter out group
+data_used <- data %>% select(-group)
+
+# use mclust functions to customize models for 2 and cluster
+BIC <- mclustBIC(data_used)
+model <- Mclust(data_used, G = 2, x = BIC)
+
+# add classifications from gaussian mixture model to dataframe
+data_gaussian <- data %>%
+  mutate(gaussian_class = model$classification)
+```
+
+#### Create a contingency matrix with the true cluster labels to summarize each clustering result.
+```{r 4_matrix}
+# create column for contingency table containing true groupings
+data_1 <- data %>% filter(group == 1) %>% count()
+data_2 <- data %>% filter(group == 2) %>% count()
+num_true <- rbind(data_1, data_2)
+names(num_true) <- "True Groupings"
+
+# create column for kmeans clustering
+kmeans_1 <- data_kmean %>% filter(kmeans_cluster == 1) %>% count()
+kmeans_2 <- data_kmean %>% filter(kmeans_cluster == 2) %>% count()
+num_kmeans <- rbind(kmeans_1, kmeans_2)
+names(num_kmeans) <- "Kmeans Groupings"
+# also make column for matrix of how many correct kmeans groupings
+kmeans_correct1 <- data_kmean %>% filter(kmeans_cluster == 1 & group == 1) %>% count()
+kmeans_correct2 <- data_kmean %>% filter(kmeans_cluster == 2 & group == 2) %>% count()
+correct_k <- rbind(kmeans_correct1, kmeans_correct2)
+names(correct_k) <- c("Correct Kmeans Groupings")
+
+# create column for gaussian mixture model
+model_1 <- data_gaussian %>% filter(gaussian_class == 1) %>% count()
+model_2 <- data_gaussian %>% filter(gaussian_class == 2) %>% count()
+num_model <- rbind(model_1, model_2)
+names(num_model) <- "Gaussian Mixture Model Groups"
+# correct groupings
+model_correct1 <- data_gaussian %>% filter(gaussian_class == 1 & group == 1) %>% count()
+model_correct2 <- data_gaussian %>% filter(gaussian_class == 2 & group == 2) %>% count()
+correct_model <- rbind(model_correct1, model_correct2)
+names(correct_model) <- c("Correct Gaussian Mixture Model Groupings")
+
+# combine to make table
+contin_table <- cbind(num_true, num_kmeans, num_model)
+rownames(contin_table) <- c("Group 1", "Group 2")
+kable(contin_table, caption = "Number per Group and Grouping Method")
+
+# table for correct groupings
+correct_groupings <- cbind(correct_k, correct_model)
+rownames(correct_groupings) <- c("Group 1", "Group 2")
+kable(correct_groupings, caption = "Number of Correct Groupings per Group and Method")
+```
+
+Neither the Gaussian Mixture Model classification nor the kmeans clusters appear to be very accurate.
+
+#### - Rather than performing clustering on the entire data matrix, we can simply perform clustering on the first few principal component score vectors. Sometimes performing clustering on the first few principal component score vectors can give better results than performing clustering on the full data with the results. Repeat the two clustering methods with the first 10 principal component scores and create a contingency matrix.
+#### - Comment on what you observe.
+```{r 4c1}
+pc_k <- kmeans(pca_data$x[,1:10], 2, nstart = 50)
+
+# use mclust functions to for model/cluster
+BIC_pc <- mclustBIC(pca_data$x[,1:10])
+model_pc <- Mclust(pca_data$x[,1:10], G = 2, x = BIC_pc)
+
+# add classifications/clusters to dataframe for use in table
+data_pc_clust <- data %>%
+  mutate(kmean_pc = pc_k$cluster, gaussian_pc = model_pc$classification)
+```
+```{r 4c2}
+# create column for kmeans clustering
+kmeans_new1 <- data_pc_clust %>% filter(kmean_pc == 1) %>% count()
+kmeans_new2 <- data_pc_clust %>% filter(kmean_pc == 2) %>% count()
+num_kmeans2 <- rbind(kmeans_new1, kmeans_new2)
+names(num_kmeans2) <- "Kmeans PC Groupings"
+# also make column for matrix of how many correct kmeans groupings
+kmeans_correctpc1 <- data_pc_clust %>% filter(kmean_pc == 1 & group == 1) %>% count()
+kmeans_correctpc2 <- data_pc_clust %>% filter(kmean_pc == 2 & group == 2) %>% count()
+correct_kpc <- rbind(kmeans_correctpc1, kmeans_correctpc2)
+names(correct_kpc) <- c("Correct Kmeans PC Groupings")
+
+# create column for gaussian mixture model
+modelpc_1 <- data_pc_clust %>% filter(gaussian_pc == 1) %>% count()
+modelpc_2 <- data_pc_clust %>% filter(gaussian_pc == 2) %>% count()
+num_model2 <- rbind(modelpc_1, modelpc_2)
+names(num_model2) <- "Gaussian Mixture Model PC Groups"
+# correct groupings
+modelpc_correct1 <- data_pc_clust %>% filter(gaussian_pc == 1 & group == 1) %>% count()
+modelpc_correct2 <- data_pc_clust %>% filter(gaussian_pc == 2 & group == 2) %>% count()
+correct_modelpc <- rbind(modelpc_correct1, modelpc_correct2)
+names(correct_modelpc) <- c("Correct Gaussian Mixture Model PC Groupings")
+
+# combine to make table
+contin_table2 <- cbind(num_true, num_kmeans2, num_model2)
+rownames(contin_table2) <- c("Group 1", "Group 2")
+kable(contin_table2, caption = "Number per Group and Grouping Method")
+
+# table for correct groupings
+correct_groupings2 <- cbind(correct_kpc, correct_modelpc)
+rownames(correct_groupings2) <- c("Group 1", "Group 2")
+kable(correct_groupings2, caption = "Number of Correct Groupings per Group and Method")
+```
+
+In both the kmeans and the gaussian mixture model, using PC score vectors gave more accurate results, though group 2 for gaussian had an issue. It would appear that kmeans clustering the first 10 principal component score vectors was gave the best results.
